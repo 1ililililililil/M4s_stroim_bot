@@ -77,6 +77,44 @@ async def claim_auto_reply(s, comment_id):
     )
     return result.rowcount == 1
 
+# New reservation-based auto-reply functions. They avoid leaving auto_reply_sent=True on failures
+# by using published_response as a temporary reservation marker.
+PENDING_MARKER = "__AUTO_REPLY_PENDING__"
+
+async def reserve_auto_reply(s, comment_id):
+    """Atomically reserve the right to send an auto-reply by setting a temporary marker in published_response.
+    Returns True if reservation succeeded (this worker should proceed to send), False otherwise."""
+    result = await s.execute(
+        update(Comment)
+        .where(
+            Comment.id == comment_id,
+            Comment.processed.is_(False),
+            Comment.processing.is_(True),
+            Comment.auto_reply_sent.is_(False),
+            Comment.published_response.is_(None),
+        )
+        .values(published_response=PENDING_MARKER)
+    )
+    return result.rowcount == 1
+
+async def finalize_auto_reply(s, comment_id, response_text):
+    """Finalize the auto-reply: set auto_reply_sent=True and store published_response only if a reservation existed."""
+    result = await s.execute(
+        update(Comment)
+        .where(Comment.id == comment_id, Comment.published_response == PENDING_MARKER)
+        .values(auto_reply_sent=True, published_response=response_text)
+    )
+    return result.rowcount == 1
+
+async def release_auto_reply_reservation(s, comment_id):
+    """Release a previously made reservation so the comment can be retried by other workers."""
+    result = await s.execute(
+        update(Comment)
+        .where(Comment.id == comment_id, Comment.published_response == PENDING_MARKER)
+        .values(published_response=None)
+    )
+    return result.rowcount == 1
+
 async def save_published_response(s, comment_id, response):
     obj = await s.get(Comment, comment_id)
     if obj:
@@ -185,9 +223,9 @@ async def seed_default_faqs(s):
         {
             "question": "Что делать при пожаре?",
             "keywords": "пожар, огонь, безопасность, эвакуация",
-            "answer": "Сразу сообщите о пожаре по номеру 101 или 112, предупредите окружающих и покиньте опасную зону, если это безопасно.",
+            "answer": "Сразу сообщите о пожаре по номеру 101 или 112, предупредите окружающих и покиньте опасную зону, е�[...]",
             "variants": [
-                "Сразу сообщите о пожаре по номеру 101 или 112, предупредите окружающих и покиньте опасную зону, если это безопасно.",
+                "Сразу сообщите о пожаре по номеру 101 или 112, предупредите окружающих и покиньте опасную зону, если [...]",
                 "Позвоните 101 или 112, предупредите людей рядом и уходите из опасной зоны, если путь безопасен.",
             ],
             "category": "FIRE_SAFETY",
@@ -196,9 +234,9 @@ async def seed_default_faqs(s):
         {
             "question": "Что делать при задымлении?",
             "keywords": "дым, задымление, выход, эвакуация",
-            "answer": "Старайтесь не вдыхать дым, двигайтесь к выходу как можно ниже к полу и покиньте помещение, если путь безопасен.",
+            "answer": "Старайтесь не вдыхать дым, двигайтесь к выходу как можно ниже к полу и покиньте помещение, есл�[...]",
             "variants": [
-                "Старайтесь не вдыхать дым, двигайтесь к выходу как можно ниже к полу и покиньте помещение, если путь безопасен.",
+                "Старайтесь не вдыхать дым, двигайтесь к выходу как можно ниже к полу и покиньте помещение, если пу[...]",
                 "При задымлении держитесь ниже к полу, не вдыхайте дым и выходите только безопасным путём.",
             ],
             "category": "FIRE_SAFETY",
@@ -207,10 +245,10 @@ async def seed_default_faqs(s):
         {
             "question": "Можно ли тушить электроприбор водой?",
             "keywords": "электроприбор, электричество, вода, оборудование",
-            "answer": "Нет. Сначала необходимо отключить электроприбор от сети. Воду нельзя использовать для тушения электрооборудования, находящегося под напряжением.",
+            "answer": "Нет. Сначала необходимо отключить электроприбор от сети. Воду нельзя использовать для тушени�[...]",
             "variants": [
-                "Нет. Сначала необходимо отключить электроприбор от сети. Воду нельзя использовать для тушения электрооборудования, находящегося под напряжением.",
-                "Воду использовать нельзя, пока оборудование под напряжением. Сначала отключите его от сети, если это безопасно.",
+                "Нет. Сначала необходимо отключить электроприбор от сети. Воду нельзя использовать для тушения эл[...]",
+                "Воду использовать нельзя, пока оборудование под напряжением. Сначала отключите его от сети, если [...]",
             ],
             "category": "EQUIPMENT",
             "priority": 100,
