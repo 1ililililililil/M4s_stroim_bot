@@ -1,3 +1,4 @@
+# updated app/main.py
 import asyncio, logging
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -7,6 +8,7 @@ from app.config import get_settings
 from app.database.database import init_db, create_tables, dispose_db, get_session_factory
 from app.database.repositories import seed_default_faqs
 from app.bot.handlers import start, comments, admin, panel
+from app.services.openai_service import init_global_service, close_global_service
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
 health_app = FastAPI()
@@ -21,13 +23,23 @@ async def run_health(port):
 
 async def main():
     settings = get_settings()
+    # initialize DB
     init_db(settings.database_url)
     await create_tables()
+
+    # seed default faqs
     async with get_session_factory()() as session:
         seeded = await seed_default_faqs(session)
         await session.commit()
     if seeded:
         logging.info("Seeded local FAQ answers count=%s", seeded)
+
+    # initialize global AI client if api key present
+    try:
+        if settings.ai_api_key:
+            await init_global_service(settings.ai_api_key, settings.openai_model, settings.ai_base_url)
+    except Exception:
+        logging.exception("Failed to initialize global AI service")
 
     bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode="HTML"))
     dp = Dispatcher()
@@ -45,7 +57,12 @@ async def main():
             run_health(settings.health_port),
         )
     finally:
+        # stop processing queue and close resources
         await comments.stop_comment_queue()
+        try:
+            await close_global_service()
+        except Exception:
+            logging.exception("Error closing global AI service")
         await bot.session.close()
         await dispose_db()
 
