@@ -1,0 +1,186 @@
+Update the existing Telegram bot comment-routing logic incrementally.
+
+Do not rewrite the project and do not change:
+- python -m app.main entry point
+- PostgreSQL/SQLite compatibility
+- OpenRouter configuration or AI model
+- Telegram polling
+- comment queue
+- existing FAST → SMART → AI → FALLBACK architecture
+- existing admin panel
+- secrets
+- unrelated datetime warnings
+
+Problem:
+The bot currently classifies many meaningful comments as PRAISE or DISCUSSION and immediately returns "Ответ не требуется", even when a human-style short reply would improve engagement.
+
+Change the behavior as follows.
+
+1. PRAISE / positive comments
+
+Do NOT automatically skip all praise.
+
+Split PRAISE into two groups:
+
+A) Minimal reactions that may still be skipped:
+- emoji-only comments
+- 👍
+- 🔥
+- ❤️
+- "круто"
+- "топ"
+- "супер"
+- other extremely short reactions without meaningful text
+
+These can remain:
+PRAISE
+Ответ не требуется
+
+B) Meaningful positive comments must receive a local reply without AI/OpenRouter.
+
+Examples:
+"Вот это многогранность личности! 😍 Здорово!"
+"Класс, очень интересно!"
+"Уважаю людей, которые умеют так многое"
+"Вот это действительно круто"
+
+For meaningful praise:
+- route through FAST/local processing
+- do not call OpenRouter
+- select a natural answer from multiple local variants
+- mark the comment as answered/published according to the existing comment-processing model
+
+Create several safe answer variants, for example:
+- "Спасибо большое! 😄 Очень приятно!"
+- "Спасибо! Рад, что вам понравилось 🔥"
+- "Благодарю! Такие комментарии очень мотивируют 😊"
+- "Спасибо большое! Стараюсь не зацикливаться только на одной сфере жизни 😄"
+- "Очень приятно это читать! Спасибо 🙌"
+
+The answer selection should vary deterministically or randomly using the existing safe architecture so the bot does not repeat exactly the same response every time.
+
+2. DISCUSSION comments
+
+Do NOT automatically skip all DISCUSSION comments.
+
+Split them into:
+
+A) Short statements that genuinely do not require a reply:
+Example:
+"Не совпало"
+"Совсем другая сфера"
+"У меня иначе"
+These may remain unanswered.
+
+B) Meaningful discussion comments must receive a short contextual reply without AI when possible.
+
+Examples:
+"Не совпало, но близко, училась на секретаря, работаю бухгалтером"
+"У меня тоже совсем другая профессия, но руки всё помнят"
+"Учился одному, а сейчас работаю совсем в другой сфере"
+"Интересно, как жизнь иногда меняет профессию"
+
+For these meaningful DISCUSSION comments:
+- use FAST/local processing
+- do not call OpenRouter for simple cases
+- reply naturally and conversationally
+- acknowledge the user's story
+- preferably use multiple response variants
+
+Example local replies:
+- "Вот это как раз и интересно — жизнь часто уводит совсем в другую сторону 😄"
+- "Зато опыт никуда не пропадает, даже если работаешь уже совсем в другой сфере 👍"
+- "Понимаю 😄 Иногда профессия меняется, а навыки всё равно остаются с нами."
+- "Получается, образование и работа могут быть совсем разными историями 😊"
+- "Вот она — многогранность жизни 😄 Главное, что опыт остаётся."
+
+3. Add deterministic rules
+
+Before deciding "Ответ не требуется" for PRAISE or DISCUSSION, evaluate:
+
+- text length
+- number of meaningful words
+- presence of personal story
+- presence of profession/job/education information
+- presence of first-person statements
+- presence of multiple sentences
+- contextual keywords
+- whether the comment adds something to the conversation
+
+A meaningful comment should not be skipped merely because its category is PRAISE or DISCUSSION.
+
+Suggested principle:
+
+SHORT_REACTION
+→ skip
+
+MEANINGFUL_PRAISE
+→ FAST local answer
+
+MEANINGFUL_DISCUSSION
+→ FAST/SMART local answer
+
+COMPLEX_DISCUSSION
+→ existing AI routing
+
+4. AI token saving
+
+Keep simple PRAISE and DISCUSSION replies local.
+
+These new local replies must not call:
+OpenRouter
+external APIs
+embeddings
+
+Track them correctly in existing routing statistics as local/FAST/SMART processing and as AI requests saved.
+
+5. Preserve existing behavior
+
+Do not break:
+- moderation
+- spam filtering
+- insult handling
+- idempotency
+- duplicate comment protection
+- fallback behavior
+- unanswered question tracking
+- candidate answers
+- FAQ routing
+- admin panel
+
+6. Tests
+
+Add focused tests covering at minimum:
+
+- emoji-only praise is skipped
+- one-word praise is skipped
+- meaningful praise receives a local answer
+- meaningful praise does not request AI
+- short meaningless discussion can be skipped
+- meaningful discussion receives a local answer
+- discussion containing profession/education information is not skipped
+- meaningful discussion does not request AI when a local template applies
+- complex discussion still reaches the existing AI route when needed
+- duplicate processing remains protected
+
+Run:
+
+python -m pytest -q
+python -m compileall -q app tests
+git diff --check
+
+Then restart only the existing Start application workflow and verify:
+
+- /health
+- Telegram polling
+- comment queue
+
+Finally report:
+- files changed
+- PRAISE behavior before/after
+- DISCUSSION behavior before/after
+- which cases use zero AI tokens
+- test result
+- healthcheck result
+- polling status
+- queue status

@@ -1,0 +1,5 @@
+- [Python Replit setup](python-replit-setup.md) — full Python tools may be needed before installing archive dependencies in the pnpm template.
+- [Telegram ID storage](telegram-id-storage.md) — raw Telegram IDs must use 64-bit PostgreSQL columns.
+- [OpenRouter token budget](openrouter-token-budget.md) — explicitly cap Chat Completions at 8192 tokens to avoid oversized credit checks.
+- [Comment idempotency](comment-idempotency.md) — durable uniqueness plus atomic database claims are required; in-memory queue checks are insufficient.
+- [Telegram post context](telegram-post-context.md) — nested reply relationships can identify the original post and parent comment without a new context service.

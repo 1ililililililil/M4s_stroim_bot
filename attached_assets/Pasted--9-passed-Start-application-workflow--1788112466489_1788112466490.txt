@@ -1,0 +1,67 @@
+Тесты прошли (9 passed). Перезапускаю только Start application; остальные workflow не трогаю. Затем проверю логи старта, healthcheck и поведение реакции/вопроса через текущий код.
+Start application снова запущен. Выполняю финальную проверку: логи workflow, локальный /health и один реальный analyze_with_reply через OpenRouter с сохранённым max_tokens=8192.
+Логика автоматических ответов настроена.
+
+Что изменено
+
+Изменён app/bot/handlers/comments.py:
+
+простые реакции и благодарности (Спасибо, 🔥, 👍, Класс) распознаются до AI-запроса;
+для них создаётся анализ PRAISE с should_reply=False;
+AI-запрос и автоматический ответ не выполняются;
+содержательные сообщения вроде Класс, а как пожарные готовятся к этому? не считаются простой реакцией и отправляются в текущий AI-поток;
+сохранены очередь, moderation, база данных и текущая архитектура;
+OpenRouter и max_tokens=8192 не изменялись.
+Ключевой участок:
+
+def precheck_comment(text: str) -> AIAnalysisResult | None:
+    if is_simple_reaction(text):
+        return AIAnalysisResult(
+            category="PRAISE", sentiment="positive", confidence=1.0,
+            summary="Простая реакция или благодарность без содержательного вопроса.",
+            requires_admin=False, should_reply=False,
+        )
+Также обновлены проверки в:
+
+tests/test_comment_processing.py
+tests/test_comment_rules.py
+Проверки
+
+Синтаксис и тесты:
+
+python -m compileall -q app tests
+OK
+9 passed, 18 warnings
+Реальный AI-запрос через OpenRouter после изменений:
+
+real_ai_status=success
+category=QUESTION
+should_reply=True
+reply_present=True
+Проверялся содержательный комментарий:
+
+Класс, а как пожарные готовятся к работе на высоте?
+Он корректно распознан как требующий ответа.
+
+Healthcheck:
+
+GET http://127.0.0.1:8080/health
+HTTP/1.1 200 OK
+{"status":"ok","version":"3"}
+Workflow Start application работает:
+
+MCHS AI Admin Bot V3 запущен
+Comment processing queue started workers=2 maxsize=100
+Start polling
+Run polling for bot @MCHS_StroimBot
+Итог:
+
+Содержательные вопросы: отвечать автоматически
+Простые реакции и благодарности: не отвечать и не отправлять в AI
+Контекстные вопросы после короткой вводной фразы: отправлять в AI
+OpenRouter: работает
+max_tokens=8192: сохранён
+Telegram polling: OK
+Comment processing queue: OK
+Healthcheck: OK
+Tests: OK — 9 passed

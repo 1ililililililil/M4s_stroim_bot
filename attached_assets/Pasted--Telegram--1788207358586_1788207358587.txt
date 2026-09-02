@@ -1,0 +1,370 @@
+Проведи полный глобальный тест всего Telegram-бота после всех последних изменений.
+
+Важно:
+Сначала ничего не изменяй в коде. Сначала проведи диагностику и тестирование существующего проекта.
+
+Проверь весь проект как единую систему:
+
+1. Запуск приложения
+- Entry point должен оставаться:
+  python -m app.main
+- Проверь Start application workflow.
+- Убедись, что одновременно не запущено несколько экземпляров бота.
+- Проверь отсутствие конфликтов порта 8080.
+- Проверь корректный запуск после restart.
+
+2. Конфигурация
+Проверь наличие и корректное использование:
+- BOT_TOKEN
+- OPENROUTER_API_KEY
+- ADMIN_IDS
+- SESSION_SECRET
+- DATABASE_URL
+
+Не выводи значения secrets.
+
+3. База данных
+Проверь:
+- работу PostgreSQL при наличии DATABASE_URL;
+- fallback на SQLite data/bot.db;
+- совместимость моделей и схемы;
+- создание/обновление таблиц;
+- уникальность Telegram комментариев:
+  (chat_id, telegram_message_id);
+- FAQ / knowledge base;
+- unanswered_questions;
+- answer_candidates;
+- сохранение routing statistics.
+
+Не нарушай PostgreSQL/SQLite compatibility.
+
+4. Telegram polling
+Проверь по логам:
+- бот успешно запускается;
+- polling стартует;
+- нет конфликтов getUpdates;
+- бот @MCHS_StroimBot успешно инициализирован.
+
+5. Comment processing queue
+Проверь:
+- очередь запускается;
+- workers=2;
+- maxsize=100;
+- worker корректно обрабатывает задачи;
+- повторные комментарии не создают повторную обработку;
+- два worker не могут одновременно обработать один комментарий.
+
+6. Идемпотентность и защита от дублей
+Обязательно протестируй:
+
+- один и тот же Telegram update дважды;
+- повторное попадание комментария в очередь;
+- два параллельных worker;
+- комментарий уже processed;
+- комментарий processing;
+- auto_reply_sent;
+- AI error;
+- Telegram send error.
+
+Проверь, что:
+
+один комментарий
+→ максимум один AI-анализ
+
+один комментарий
+→ максимум один опубликованный автоответ.
+
+7. Контекст комментариев
+Проверь:
+
+- комментарий непосредственно к посту;
+- ответ на другой комментарий;
+- передачу родительского комментария;
+- передачу автора;
+- отсутствие reply context;
+- безопасное ограничение длины контекста.
+
+Проверь, что отсутствие контекста не вызывает падение обработки.
+
+8. FAST → SMART → AI routing
+Протестируй все маршруты.
+
+FAST:
+- 👍
+- 🔥
+- Спасибо
+- Класс
+- простые реакции
+- точные FAQ вопросы
+
+SMART:
+- перефразированные FAQ вопросы;
+- совпадения через keywords;
+- synonyms;
+- phrase matching;
+- confidence threshold >= 0.80.
+
+AI:
+- сложный вопрос;
+- контекстный вопрос;
+- нестандартный вопрос;
+- вопрос, который FAST и SMART не смогли обработать.
+
+Проверь корректное сохранение:
+- route
+- ai_requested
+- ai_failed
+- fallback_used.
+
+9. Проверка экономии AI токенов
+Убедись, что OpenRouter НЕ вызывается для:
+
+- реакций;
+- благодарностей;
+- FAST FAQ;
+- SMART FAQ;
+- approved local answers.
+
+Убедись, что AI вызывается только тогда, когда локальная обработка не справилась.
+
+10. OpenRouter / AI
+Проверь:
+
+- существующий OpenRouter configuration;
+- текущую AI model;
+- max_tokens=8192;
+- analyze;
+- analyze_with_reply;
+- responses.
+
+Не меняй AI model, max_tokens или OpenRouter configuration.
+
+11. AI fallback
+Протестируй искусственную ошибку AI.
+
+После ошибки:
+
+1. Выполнить свежий поиск локального FAQ.
+2. Если confidence >= 0.80:
+   - использовать локальный ответ;
+   - route=FALLBACK;
+   - fallback_used=True.
+3. Если безопасного ответа нет:
+   - не публиковать пустой ответ;
+   - сохранить last_error;
+   - комментарий должен оставаться unprocessed согласно существующей логике;
+   - duplicate retry protection должна сохраниться.
+
+12. Unanswered questions
+Проверь:
+
+- создание unanswered question;
+- отсутствие дубликатов;
+- сохранение:
+  chat_id,
+  comment_id,
+  question text,
+  post context,
+  failure reason,
+  status.
+
+Проверь ручное закрытие вопроса через админ-панель.
+
+13. Answer candidates
+Проверь:
+
+- успешный AI ответ создаёт candidate;
+- candidate=PENDING;
+- кандидат не становится FAQ автоматически;
+- approve добавляет ответ в локальную FAQ базу;
+- reject корректно отклоняет кандидата.
+
+14. Knowledge base
+Проверь:
+
+- существующие FAQ;
+- startup seeding;
+- idempotent seeding;
+- отсутствие повторного создания одинаковых FAQ;
+- поиск FAQ;
+- keywords;
+- answer variants;
+- category;
+- priority.
+
+15. Админ-команды
+Проверь:
+
+/panel
+/settings
+/stats
+/knowledge
+/remember
+/answers
+/answer_candidates
+/unanswered
+/addanswer
+/approveanswer
+/rejectanswer
+
+Проверь доступ:
+- ADMIN_IDS имеют доступ;
+- не-admin получают отказ;
+- секреты никогда не отображаются.
+
+16. Inline admin panel
+Отдельно проверь /panel.
+
+После команды /panel должна открываться InlineKeyboardMarkup, а НЕ текстовый список команд.
+
+Проверь кнопки:
+
+🤖 Автоответы
+📊 Статистика
+🧠 База знаний
+❓ Неотвеченные
+💡 Кандидаты
+⚙️ Настройки
+🔄 Обновить
+❌ Закрыть
+
+Проверь:
+
+- навигацию;
+- кнопки Назад;
+- callback queries;
+- pagination;
+- refresh;
+- close;
+- stale callbacks;
+- unauthorized access;
+- message is not modified;
+- FSM flows;
+- cancel;
+- FAQ creation;
+- FAQ search;
+- unanswered answer flow;
+- candidate approval;
+- candidate rejection;
+- settings threshold.
+
+Проверь, что в проекте существует ровно один активный Command("panel").
+
+17. Statistics
+Проверь корректность статистики:
+
+- FAST/local processing;
+- SMART matches;
+- AI requests;
+- AI requests saved;
+- AI failures;
+- fallback answers;
+- unanswered questions;
+- published responses;
+- skipped comments;
+- ignored comments;
+- deleted comments.
+
+18. Health endpoint
+Проверь:
+
+GET /health
+
+Ожидаемый результат:
+
+HTTP 200
+
+{
+  "status": "ok",
+  "version": "3"
+}
+
+19. Полный тестовый набор
+
+Запусти:
+
+python -m compileall -q app tests
+
+python -m pytest -q
+
+git diff --check
+
+Используй именно:
+
+python -m pytest
+
+Не используй standalone pytest как основной способ запуска, так как в этой среде он может неправильно определять project root.
+
+20. Runtime verification
+
+После тестов:
+
+- перезапусти только Start application;
+- проверь свежие логи;
+- проверь Telegram polling;
+- проверь comment queue;
+- проверь /health;
+- убедись, что нет второго процесса бота;
+- убедись, что порт 8080 занимает только актуальный экземпляр приложения.
+
+Не запускай и не исправляй нерелевантные artifact workflows.
+
+ВАЖНО:
+
+Не меняй:
+- архитектуру проекта;
+- PostgreSQL/SQLite compatibility;
+- AI model;
+- OpenRouter configuration;
+- max_tokens=8192;
+- существующую логику обработки комментариев;
+- datetime.utcnow() warnings.
+
+Если во время глобального теста найдена ошибка:
+
+1. Остановись на первой реальной технической ошибке.
+2. Чётко сообщи:
+   - какой тест или проверка упала;
+   - полный текст ошибки;
+   - файл и место проблемы;
+   - является ли это regression после последних изменений.
+3. Не выполняй широкий рефакторинг.
+4. Предложи минимальное исправление.
+5. После исправления повтори только необходимые проверки, затем полный pytest.
+
+Финальный отчёт предоставь в формате:
+
+GLOBAL BOT TEST RESULT
+
+Bot running:
+Telegram polling:
+Comment queue:
+Database:
+FAST routing:
+SMART routing:
+AI routing:
+AI fallback:
+Duplicate protection:
+Race condition protection:
+Context processing:
+Knowledge base:
+Unanswered questions:
+Answer candidates:
+Admin commands:
+Inline panel:
+Statistics:
+Healthcheck:
+Compile:
+Tests:
+Diff check:
+Port/process status:
+
+И отдельно:
+
+НАЙДЕННЫЕ ПРОБЛЕМЫ:
+или
+ПРОБЛЕМ НЕ ОБНАРУЖЕНО.
+
+В конце дай итоговый статус:
+
+GLOBAL TEST: PASS / FAIL

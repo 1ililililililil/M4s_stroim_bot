@@ -1,0 +1,234 @@
+Implement the attached specification in the current project.
+
+Before making changes, inspect the specification carefully and compare it with the current working implementation.
+
+The current project is already verified and working:
+
+- Start application workflow is running
+- Entry point: python -m app.main
+- Telegram polling is active
+- Comment processing queue: 2 workers, maxsize 100
+- GET /health returns {"status":"ok","version":"3"}
+- Tests currently pass: 15 passed
+- Database uses runtime DATABASE_URL when available
+- SQLite fallback: data/bot.db
+- PostgreSQL/SQLite compatibility must be preserved
+- OpenRouter configuration must be preserved
+- Existing max_tokens configuration must be preserved
+- Existing duplicate/idempotency protection must be preserved
+- Existing comment context support must be preserved
+- Existing simple reaction and short-question handling must not be broken
+- Existing moderation behavior must be preserved
+- Existing datetime.utcnow() deprecation warnings are out of scope
+
+Implement the attached FAST / SMART / AI routing specification with minimal compatible changes.
+
+Requirements:
+
+1. FAST layer
+Use deterministic local processing first.
+
+It should handle:
+- simple reactions
+- gratitude
+- predictable comments
+- known FAQ questions
+- ready-made local answers
+
+FAST processing must not call OpenRouter and must not consume AI tokens.
+
+2. SMART layer
+Implement lightweight intent/question classification and matching against the local knowledge/FAQ database.
+
+Use deterministic matching where possible:
+- normalization
+- keywords
+- synonyms
+- phrase matching
+- intent/category matching
+- confidence scoring
+
+Do not use embeddings or external APIs for SMART matching.
+
+3. AI layer
+Only send comments to OpenRouter when they are:
+- complex
+- contextual
+- unusual
+- open-ended
+- not confidently matched by FAST/SMART
+
+Preserve the existing:
+- post context
+- parent comment context
+- OpenRouter configuration
+- max_tokens
+- queue processing
+- idempotency protection
+
+4. Ready-made answers
+Add support for local response variants.
+
+Responses should be selected from variants so the bot does not always answer with exactly the same phrase.
+
+5. AI fallback
+If OpenRouter fails because of:
+- API/provider error
+- timeout
+- network error
+- insufficient credits
+- unavailable provider
+
+do not immediately fail.
+
+Try the local knowledge base and FAQ as fallback.
+
+If a confident safe answer exists:
+- publish the local fallback answer
+- record that fallback was used
+
+If no reliable answer exists:
+- do not invent an answer
+- do not publish an empty response
+
+6. Unanswered questions
+Implement tracking for questions that could not be answered confidently by:
+- FAST
+- SMART
+- AI
+- fallback
+
+Store them in a way that allows the administrator to review them later.
+
+Avoid duplicate unanswered-question records.
+
+7. Answer candidates
+Implement support for administrator-approved answer candidates if required by the attached specification.
+
+Candidates must not automatically become public answers unless the specification explicitly allows that.
+
+8. Admin commands
+Implement only the useful commands required by the specification.
+
+Reuse the existing admin command architecture.
+
+Admin functionality should allow management/review of:
+- knowledge entries
+- FAQ entries
+- unanswered questions
+- answer candidates
+- basic routing/usage statistics
+
+Do not build an unnecessarily complicated interface.
+
+9. Statistics
+Track at minimum:
+
+- FAST/local processed comments
+- SMART/FAQ answers
+- AI answers
+- fallback answers
+- skipped comments
+- AI failures
+- unanswered questions
+
+The goal is to measure how many AI requests and tokens are saved.
+
+10. Database
+Inspect the existing models and repositories before changing the schema.
+
+Add only the minimal models/tables required by the specification.
+
+All database changes must remain compatible with:
+
+- PostgreSQL through DATABASE_URL
+- SQLite fallback
+
+Do not break existing tables or data.
+
+11. Processing order
+
+Use a safe routing order approximately like this:
+
+1. Duplicate/idempotency protection
+2. Moderation/spam checks
+3. Comment/context preparation
+4. FAST deterministic handling
+5. SMART FAQ/knowledge matching
+6. Existing AI processing for unresolved complex questions
+7. Local fallback when AI fails
+8. Unanswered-question tracking when no safe answer exists
+
+Preserve the existing protection against:
+- duplicate updates
+- parallel processing
+- duplicate AI calls
+- duplicate auto replies
+
+12. Tests
+
+Add tests for:
+
+- simple reaction without AI
+- gratitude without AI
+- local ready-made answer without AI
+- SMART FAQ match without AI
+- proof that OpenRouter is not called for FAST/SMART matches
+- complex question reaching AI
+- AI failure with successful local fallback
+- AI failure without fallback
+- unanswered-question tracking
+- duplicate unanswered-question prevention
+- answer candidate behavior
+- existing duplicate/race-condition protection
+- existing post/parent-comment context behavior
+
+Do not remove existing tests.
+
+Run:
+
+python -m compileall -q app tests
+
+Then:
+
+python -m pytest -q
+
+Important:
+Use python -m pytest, not the standalone pytest command.
+
+13. Startup verification
+
+After all tests pass:
+
+- restart only the existing Start application workflow
+- verify Telegram polling
+- verify the comment processing queue
+- verify GET /health
+
+Do not start or modify unrelated artifact workflows.
+
+FINAL REPORT
+
+When finished, report:
+
+1. Files changed.
+2. Database changes.
+3. FAST routing behavior.
+4. SMART routing behavior.
+5. Which comments use zero AI tokens.
+6. Which comments reach OpenRouter.
+7. AI fallback behavior.
+8. Unanswered-question handling.
+9. Answer candidate handling.
+10. Admin commands added or changed.
+11. Statistics added.
+12. Test result.
+13. Healthcheck result.
+14. Telegram polling status.
+15. Comment queue status.
+
+Make incremental, minimal, compatible changes.
+
+Do not rewrite the project from scratch.
+
+Stop and report the first unexpected technical error if one appears during implementation.

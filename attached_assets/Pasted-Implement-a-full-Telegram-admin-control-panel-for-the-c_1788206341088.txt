@@ -1,0 +1,427 @@
+Implement a full Telegram admin control panel for the current working bot.
+
+IMPORTANT: The project is currently working correctly. Make incremental changes only. Do not rewrite the project or change unrelated functionality.
+
+Current verified state that must be preserved:
+
+- Entry point: python -m app.main
+- Start application workflow is working
+- Telegram polling is active
+- Comment processing queue works: 2 workers, maxsize 100
+- FastAPI GET /health works and returns {"status":"ok","version":"3"}
+- PostgreSQL via DATABASE_URL must remain supported
+- SQLite fallback at data/bot.db must remain supported
+- OpenRouter configuration must remain unchanged
+- Existing AI model and max_tokens=8192 must remain unchanged
+- FAST → SMART → AI → FALLBACK routing must remain unchanged
+- Existing local FAQ routing must remain unchanged
+- Unanswered question tracking must remain unchanged
+- Answer candidates must remain unchanged
+- Existing idempotency and duplicate protection must remain unchanged
+- Existing moderation/comment processing rules must remain unchanged
+- Existing post and parent-comment context support must remain unchanged
+- Do not refactor unrelated datetime.utcnow() warnings
+- Current tests passed before this task: 21 passed
+
+GOAL
+
+Create a convenient Telegram admin panel so the administrator does not need to remember or search for commands.
+
+The existing commands must continue working, but all important functions should also be accessible through buttons.
+
+ACCESS CONTROL
+
+The panel and all callbacks must be available only to existing administrators.
+
+Reuse the current ADMIN_IDS/admin authorization logic.
+
+Never allow a non-admin to access data or trigger admin actions through callback queries.
+
+==================================================
+1. MAIN ADMIN PANEL
+==================================================
+
+The existing /panel command should open or be upgraded to a convenient inline-button control panel.
+
+Main screen:
+
+👨‍🚒 МЧС | Мы Чего-то Строим
+Панель управления ботом
+
+Buttons:
+
+🤖 Автоответы
+📊 Статистика
+
+🧠 База знаний
+❓ Неотвеченные
+
+💡 Кандидаты
+⚙️ Настройки
+
+🔄 Обновить
+❌ Закрыть
+
+Use InlineKeyboardMarkup.
+
+Prefer editing the existing panel message instead of sending many new messages.
+
+Every subsection must contain:
+
+⬅️ Назад в меню
+
+==================================================
+2. AUTO REPLIES SECTION
+==================================================
+
+Button:
+
+🤖 Автоответы
+
+Show the current state of automatic replies.
+
+Include:
+
+- Smart Auto enabled/disabled
+- Current confidence threshold if configurable
+- FAST/SMART/AI/FALLBACK behavior summary
+
+Buttons:
+
+🟢 Включить автоответы
+🔴 Выключить автоответы
+
+📊 Статистика автоответов
+
+⬅️ Назад
+
+Do not change the existing auto-reply architecture.
+
+Buttons must call the existing functionality or minimal compatible wrappers around it.
+
+==================================================
+3. STATISTICS SECTION
+==================================================
+
+Button:
+
+📊 Статистика
+
+Show existing statistics in a clean Telegram-friendly format.
+
+Include at minimum:
+
+⚡ FAST обработано
+🧠 SMART/FAQ ответы
+🤖 AI запросы
+🟠 FALLBACK ответы
+💰 AI запросов сэкономлено
+⚠️ Ошибки AI
+❓ Неотвеченные вопросы
+📤 Опубликованные ответы
+⏭ Пропущенные комментарии
+🚫 Удалённые/заблокированные комментарии if currently tracked
+
+Add:
+
+🔄 Обновить статистику
+⬅️ Назад
+
+Reuse existing statistics repositories and logic.
+
+Do not duplicate statistics logic unnecessarily.
+
+==================================================
+4. KNOWLEDGE BASE SECTION
+==================================================
+
+Button:
+
+🧠 База знаний
+
+Show:
+
+- total knowledge/FAQ entries
+- active local answers
+- available answer variants
+
+Buttons:
+
+➕ Добавить ответ
+📚 Список FAQ
+🔍 Найти
+⬅️ Назад
+
+For adding an answer, create a simple administrator conversation/finite-state flow compatible with the current aiogram version.
+
+Suggested flow:
+
+1. Ask for question.
+2. Ask for keywords (optional).
+3. Ask for answer.
+4. Ask for additional answer variants (optional).
+5. Show preview.
+6. Buttons:
+
+✅ Сохранить
+✏️ Отменить
+
+Do not add an incomplete entry to the database.
+
+For FAQ listing:
+
+- pagination
+- previous/next buttons where needed
+- compact display
+
+For search:
+
+- ask administrator for text
+- use the existing local knowledge/FAQ search
+- show matching entries
+
+==================================================
+5. UNANSWERED QUESTIONS SECTION
+==================================================
+
+Button:
+
+❓ Неотвеченные
+
+Show unanswered questions recorded by the current routing system.
+
+Display a manageable paginated list.
+
+For an individual unanswered question show:
+
+❓ Question text
+📄 Post context if available
+⚠️ Failure reason/status
+
+Buttons:
+
+✍️ Добавить свой ответ
+🧠 Добавить в базу
+🤖 Сгенерировать кандидата if compatible with existing AI flow
+🗑 Закрыть/решить вопрос
+⬅️ Назад
+
+IMPORTANT:
+
+Do not automatically call AI when simply opening the unanswered list.
+
+AI generation must happen only after the administrator explicitly presses the generation button.
+
+When resolving a question, update the existing unanswered-question status without creating duplicate records.
+
+==================================================
+6. ANSWER CANDIDATES SECTION
+==================================================
+
+Button:
+
+💡 Кандидаты
+
+Show pending answer candidates with pagination.
+
+For each candidate show:
+
+💡 Candidate ID
+❓ Original question
+🤖 Proposed answer
+
+Buttons:
+
+✅ Одобрить
+❌ Отклонить
+🧠 Добавить в базу if approval requires it
+⬅️ Назад
+
+Preserve the current rule:
+
+Candidates must NOT automatically become public answers.
+
+Only an administrator approval action may make a candidate active.
+
+Reuse the existing candidate approval/rejection logic.
+
+==================================================
+7. SETTINGS SECTION
+==================================================
+
+Button:
+
+⚙️ Настройки
+
+Show only settings that already exist or are safe to manage.
+
+At minimum show:
+
+🤖 Auto replies status
+🎯 Confidence threshold
+🧠 Current routing flow:
+FAST → SMART → AI → FALLBACK
+
+If confidence threshold is already configurable, allow safe adjustment with buttons or a simple input flow.
+
+Do not expose or display:
+
+- BOT_TOKEN
+- OPENROUTER_API_KEY
+- SESSION_SECRET
+- database credentials
+- any secret values
+
+Do not modify OpenRouter model or API configuration from this panel.
+
+==================================================
+8. NAVIGATION AND UX
+==================================================
+
+Requirements:
+
+- Mobile-friendly text
+- Short readable messages
+- Inline buttons
+- Every section has a Back button
+- Prefer edit_message_text/edit_message_reply_markup
+- Avoid chat spam
+- Handle Telegram "message is not modified" errors safely
+- Handle expired/invalid callback data safely
+- Answer callback queries appropriately
+- Use compact callback_data values
+- Preserve state safely for multi-step admin input flows
+- Provide cancel buttons during input flows
+
+Add:
+
+❌ Отмена
+
+to every multi-step input process.
+
+==================================================
+9. EXISTING COMMAND COMPATIBILITY
+==================================================
+
+Do not remove existing commands.
+
+Existing commands such as:
+
+/panel
+/settings
+/stats
+/knowledge
+/remember
+/answers
+/answer_candidates
+/unanswered
+/addanswer
+/approveanswer
+/rejectanswer
+
+must continue working if they currently exist.
+
+The panel should be an additional convenient UI layer over the existing functionality.
+
+Avoid creating separate duplicate business logic.
+
+==================================================
+10. CALLBACK SECURITY
+==================================================
+
+Every callback handler must verify administrator authorization.
+
+Do not rely only on the fact that the original panel message was sent to an admin.
+
+A forwarded message, stale button, or manually triggered callback must still be rejected for non-admin users.
+
+Unauthorized users should receive a short callback alert.
+
+==================================================
+11. TESTS
+==================================================
+
+Add focused tests for:
+
+- /panel opens the main panel
+- non-admin cannot access panel callbacks
+- navigation between main sections
+- back button returns to main panel
+- auto-reply toggle buttons use existing logic
+- statistics screen renders
+- knowledge entry creation does not save incomplete data
+- knowledge entry save works
+- unanswered question list opens
+- unanswered question resolution does not create duplicates
+- candidate approval uses existing logic
+- candidate rejection uses existing logic
+- callback authorization
+- cancel flow clears temporary state
+
+Do not remove or weaken existing tests.
+
+==================================================
+12. VERIFICATION
+==================================================
+
+After implementation run:
+
+python -m compileall -q app tests
+
+Then:
+
+python -m pytest -q
+
+IMPORTANT:
+Use python -m pytest, not standalone pytest.
+
+Also run:
+
+git diff --check
+
+Fix only issues caused by this task.
+
+Do not refactor unrelated code.
+
+==================================================
+13. RUNTIME CHECK
+==================================================
+
+After tests pass:
+
+Restart only the existing Start application workflow.
+
+Do not modify or start unrelated artifact workflows.
+
+Verify:
+
+1. Telegram polling starts.
+2. Comment processing queue starts.
+3. GET /health returns HTTP 200.
+4. The admin panel can be opened with /panel.
+
+Preserve the existing workflow and entry point:
+
+python -m app.main
+
+==================================================
+FINAL REPORT
+==================================================
+
+Report:
+
+1. Files changed.
+2. Panel sections implemented.
+3. Buttons and navigation implemented.
+4. Admin security implementation.
+5. Knowledge-base management implementation.
+6. Unanswered-question management implementation.
+7. Candidate management implementation.
+8. Settings implemented.
+9. Existing commands preserved.
+10. Test result.
+11. Healthcheck result.
+12. Telegram polling status.
+13. Comment queue status.
+
+Make minimal compatible changes and do not rewrite the application.

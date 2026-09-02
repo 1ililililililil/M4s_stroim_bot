@@ -1,0 +1,12 @@
+modules = ["python-3.12", "web"]
+run = "python -m app.main"
+entrypoint = "app/main.py"
+
+[deployment]
+run = ["python", "-m", "app.main"]
+router = "application"
+deploymentTarget = "vm"
+
+[nix]
+channel = "stable-25_05"
+packages = ["postgresql"]
