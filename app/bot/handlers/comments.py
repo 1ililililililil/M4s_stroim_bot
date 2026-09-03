@@ -19,6 +19,13 @@ from app.services.local_routing import FALLBACK_CONFIDENCE_THRESHOLD, select_ans
 from app.bot.keyboards.admin import admin_keyboard, moderation_keyboard
 from app.schemas.ai import AIAnalysisResult, ResponseVariant
 
+# semantic classifier import
+from app.services.semantic import (
+    should_semantic_reply,
+    Intent as SemanticIntent,
+    Route as SemanticRoute,
+)
+
 router = Router()
 log = logging.getLogger(__name__)
 SAFE = {"QUESTION","PRAISE","JOKE","DISCUSSION","CRITICISM"}
@@ -62,7 +69,7 @@ DISCUSSION_RE = re.compile(
 LOCAL_PRAISE_VARIANTS = (
     "Спасибо большое! 😄 Очень приятно!",
     "Спасибо! Рад, что вам понравилось 🔥",
-    "Благодарю! Такие комментарии очень мотивируют 😊",
+    "Благодарю! Такие комментарии очень м��тивируют 😊",
     "Спасибо большое! Стараюсь не зацикливаться только на одной сфере жизни ����",
     "Очень приятно это читать! Спасибо 🙌",
 )
@@ -543,102 +550,171 @@ async def _process_comment(bot, comment_id, notify=True):
                         analysis.category,
                     )
             else:
-                social_result = local_social_analysis(comment.text, comment_id)
-                if social_result:
-                    analysis, responses = social_result
-                    route = "FAST" if analysis.category == "PRAISE" else "SMART"
-                    auto_reply_text = responses[0].text if responses else ""
-                    log.info(
-                        "%s local social route selected comment=%s category=%s",
-                        route,
+                # --- semantic classifier integration ---
+                try:
+                    sem_result, sem_reply = should_semantic_reply(comment.text)
+                except Exception:
+                    log.exception(
+                        "Semantic classifier failed for comment=%s",
                         comment_id,
-                        analysis.category,
                     )
-                else:
-                    faq_started = time.perf_counter()
-                    log.info("SMART search started comment=%s query=%s", comment_id, comment.text[:200])
-                    faq_matches = await search_faq_answers(
-                        s,
-                        comment.text,
-                        comment.chat_id,
-                        limit=5,
-                    )
-                    faq_match = faq_matches[0] if faq_matches else None
-                    log.info(
-                        "SMART search completed comment=%s results=%s best_confidence=%s",
-                        comment_id,
-                        len(faq_matches),
-                        f"{faq_match.confidence:.3f}" if faq_match else "none",
-                    )
-                    if faq_match and faq_match.confident:
-                        route = faq_match.layer
-                        analysis = local_analysis(faq_match)
-                        responses = local_responses(faq_match, comment_id)
+                    sem_result, sem_reply = None, None
+
+                sem_handled = False
+
+                if sem_result:
+                    # SAFETY: continue existing pipeline for important topics
+                    if sem_result.route == SemanticRoute.SAFE_PIPELINE:
+                        log.info(
+                            "Semantic classifier requested safe pipeline for comment=%s",
+                            comment_id,
+                        )
+                        sem_handled = False
+
+                    elif sem_result.route == SemanticRoute.EXISTING_PIPELINE:
+                        # don't answer here, continue with existing pipeline
+                        sem_handled = False
+
+                    elif sem_result.route == SemanticRoute.SKIP:
+                        analysis = AIAnalysisResult(
+                            category="PRAISE",
+                            sentiment="positive",
+                            confidence=0.95,
+                            summary="Semantic: short reaction / skip",
+                            requires_admin=False,
+                            should_reply=False,
+                        )
+                        route = "FAST_REACTION"
+                        sem_handled = True
+                        log.info("Semantic classifier SKIP for comment=%s", comment_id)
+
+                    elif sem_result.route == SemanticRoute.SEMANTIC_REPLY and sem_reply:
+                        intents = set(sem_result.intents)
+                        if (SemanticIntent.PRAISE in intents) or (SemanticIntent.GRATITUDE in intents):
+                            route = "FAST"
+                        else:
+                            route = "SMART"
+                        responses = [ResponseVariant(variant=1, text=sem_reply)]
+                        auto_reply_text = sem_reply
+                        if SemanticIntent.PRAISE in intents:
+                            category = "PRAISE"
+                            sentiment = "positive"
+                        else:
+                            category = "DISCUSSION"
+                            sentiment = "neutral"
+                        analysis = AIAnalysisResult(
+                            category=category,
+                            sentiment=sentiment,
+                            confidence=sem_result.confidence,
+                            summary="Local semantic reply generated",
+                            requires_admin=False,
+                            should_reply=True,
+                        )
+                        sem_handled = True
+                        log.info(
+                            "Semantic reply selected comment=%s route=%s intents=%s",
+                            comment_id,
+                            route,
+                            ",".join(i.value for i in intents),
+                        )
+
+                if not sem_handled:
+                    social_result = local_social_analysis(comment.text, comment_id)
+                    if social_result:
+                        analysis, responses = social_result
+                        route = "FAST" if analysis.category == "PRAISE" else "SMART"
                         auto_reply_text = responses[0].text if responses else ""
                         log.info(
-                            "%s route selected comment=%s confidence=%.3f matched=%s",
+                            "%s local social route selected comment=%s category=%s",
                             route,
                             comment_id,
-                            faq_match.confidence,
-                            ",".join(faq_match.matched_keywords),
+                            analysis.category,
                         )
                     else:
-                        log.info(
-                            "SMART confidence below threshold comment=%s threshold=%.2f",
-                            comment_id,
-                            FALLBACK_CONFIDENCE_THRESHOLD,
-                        )
-                    if not comment.post_text:
-                        log.info(
-                            "Post context unavailable, processing comment without post context comment=%s",
-                            comment_id,
-                        )
-                    if not faq_match or not faq_match.confident:
-                        search_started = time.perf_counter()
-                        memory_entries = await search_relevant_knowledge(
+                        faq_started = time.perf_counter()
+                        log.info("SMART search started comment=%s query=%s", comment_id, comment.text[:200])
+                        faq_matches = await search_faq_answers(
                             s,
                             comment.text,
                             comment.chat_id,
-                            current_post_id=comment.post_message_id,
-                            limit=3,
+                            limit=5,
                         )
+                        faq_match = faq_matches[0] if faq_matches else None
                         log.info(
-                            "Knowledge search completed comment=%s results=%s",
+                            "SMART search completed comment=%s results=%s best_confidence=%s",
                             comment_id,
-                            len(memory_entries),
+                            len(faq_matches),
+                            f"{faq_match.confidence:.3f}" if faq_match else "none",
                         )
-                        ai_context = build_ai_context(comment.post_text, memory_entries)
-                        ai = get_global_service()
-                        comment.ai_requested = True
-                        route = "AI"
-                        ai_started = time.perf_counter()
-                        mode = "combined" if cfg.auto_reply_enabled else "analysis"
-                        log.info("PERF comment=%s ai_analysis_started mode=%s", comment_id, mode)
-                        try:
-                            if cfg.auto_reply_enabled:
-                                combined = await ai.analyze_with_reply(
-                                    comment.text,
-                                    [x.text for x in memory_entries],
-                                    ai_context,
-                                )
-                                analysis = combined
-                                auto_reply_text = combined.reply.strip()
-                            else:
-                                analysis = await ai.analyze(
-                                    comment.text,
-                                    [x.text for x in memory_entries],
-                                    ai_context,
-                                )
-                        except Exception as error:
-                            if not await handle_ai_failure(error):
-                                return False
+                        if faq_match and faq_match.confident:
+                            route = faq_match.layer
+                            analysis = local_analysis(faq_match)
+                            responses = local_responses(faq_match, comment_id)
+                            auto_reply_text = responses[0].text if responses else ""
+                            log.info(
+                                "%s route selected comment=%s confidence=%.3f matched=%s",
+                                route,
+                                comment_id,
+                                faq_match.confidence,
+                                ",".join(faq_match.matched_keywords),
+                            )
                         else:
                             log.info(
-                                "PERF comment=%s ai_analysis_finished duration_ms=%.2f",
+                                "SMART confidence below threshold comment=%s threshold=%.2f",
                                 comment_id,
-                                (time.perf_counter() - ai_started) * 1000,
+                                FALLBACK_CONFIDENCE_THRESHOLD,
                             )
-                            log.info("AI analysis completed comment=%s", comment_id)
+                        if not comment.post_text:
+                            log.info(
+                                "Post context unavailable, processing comment without post context comment=%s",
+                                comment_id,
+                            )
+                        if not faq_match or not faq_match.confident:
+                            search_started = time.perf_counter()
+                            memory_entries = await search_relevant_knowledge(
+                                s,
+                                comment.text,
+                                comment.chat_id,
+                                current_post_id=comment.post_message_id,
+                                limit=3,
+                            )
+                            log.info(
+                                "Knowledge search completed comment=%s results=%s",
+                                comment_id,
+                                len(memory_entries),
+                            )
+                            ai_context = build_ai_context(comment.post_text, memory_entries)
+                            ai = get_global_service()
+                            comment.ai_requested = True
+                            route = "AI"
+                            ai_started = time.perf_counter()
+                            mode = "combined" if cfg.auto_reply_enabled else "analysis"
+                            log.info("PERF comment=%s ai_analysis_started mode=%s", comment_id, mode)
+                            try:
+                                if cfg.auto_reply_enabled:
+                                    combined = await ai.analyze_with_reply(
+                                        comment.text,
+                                        [x.text for x in memory_entries],
+                                        ai_context,
+                                    )
+                                    analysis = combined
+                                    auto_reply_text = combined.reply.strip()
+                                else:
+                                    analysis = await ai.analyze(
+                                        comment.text,
+                                        [x.text for x in memory_entries],
+                                        ai_context,
+                                    )
+                            except Exception as error:
+                                if not await handle_ai_failure(error):
+                                    return False
+                            else:
+                                log.info(
+                                    "PERF comment=%s ai_analysis_finished duration_ms=%.2f",
+                                    comment_id,
+                                    (time.perf_counter() - ai_started) * 1000,
+                                )
+                                log.info("AI analysis completed comment=%s", comment_id)
 
             analysis = normalize_analysis(analysis, comment.text)
             comment.route = route or "SKIPPED"
