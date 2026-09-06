@@ -9,6 +9,7 @@ from app.database.database import init_db, create_tables, dispose_db, get_sessio
 from app.database.repositories import seed_default_faqs
 from app.bot.handlers import start, comments, admin, panel
 from app.services.openai_service import init_global_service, close_global_service
+from aiogram.types import BotCommand, MenuButtonCommands
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
 health_app = FastAPI()
@@ -49,7 +50,14 @@ async def main():
     dp.include_router(panel.router)
     dp.include_router(comments.router)
 
-    logging.info("MCHS AI Admin Bot V3 запущен. Админов: %s", len(settings.admins))
+    # Ensure a convenient menu button and the /panel command are available to users
+    try:
+        await bot.set_my_commands([BotCommand(command="panel", description="⚙️ Панель")])
+        await bot.set_chat_menu_button(MenuButtonCommands())
+    except Exception:
+        logging.exception("Failed to set bot menu/commands")
+
+    logging.info("MCHS AI Admin Bot V3 запущен. Ад��инов: %s", len(settings.admins))
     await comments.start_comment_queue()
     try:
         await asyncio.gather(
