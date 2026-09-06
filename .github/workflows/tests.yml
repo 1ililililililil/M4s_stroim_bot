@@ -1,0 +1,65 @@
+name: CI - Bot validation
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch: {}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install dependencies
+        run: |
+          if [ -f requirements.txt ]; then
+            python -m pip install -r requirements.txt
+          else
+            echo "requirements.txt not found, aborting. Please add requirements.txt to run CI." >&2
+            exit 1
+          fi
+
+      - name: Compile Python files
+        run: python -m compileall -q app
+
+      - name: Check for U+FFFD replacement characters
+        run: |
+          python - <<'PY'
+import sys
+from pathlib import Path
+bad = []
+for p in Path('app').rglob('*.py'):
+    try:
+        text = p.read_text(encoding='utf-8')
+    except Exception as e:
+        print(f"ERROR: cannot read {p}: {e}", file=sys.stderr)
+        sys.exit(1)
+    for i, line in enumerate(text.splitlines(), start=1):
+        if '\ufffd' in line:
+            bad.append(f"{p}:{i}:{line}")
+if bad:
+    print("Found U+FFFD replacement characters in the following locations:")
+    for b in bad:
+        print(b)
+    sys.exit(1)
+print('PASS: No U+FFFD replacement characters found')
+PY
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Git diff check
+        run: git diff --check
