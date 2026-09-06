@@ -80,8 +80,8 @@ def patch_runtime(monkeypatch, fake_ai, auto_reply_enabled=False):
             ai_base_url=None,
         ),
     )
-    monkeypatch.setattr(comments, "OpenAIService", lambda *args: fake_ai)
-
+    monkeypatch.setattr(comments, "get_global_service", lambda: fake_ai,
+                       )
 
 async def seed_comment(text, telegram_message_id=100):
     async with get_session_factory()() as session:
