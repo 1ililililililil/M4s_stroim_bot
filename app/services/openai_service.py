@@ -175,35 +175,57 @@ class OpenAIService:
         context_words = self._extract_meaningful_words(post_context or "", limit=8)
         context_stems = {self._stem(w) for w in context_words}
 
+        # Topic keyword groups (not exhaustive) to allow paraphrases
+        event_keywords = {"меропр", "массов", "мероприят", "толп", "толпа", "люд", "людей", "скоплен", "скопл", "событ", "концерт", "фестиваль", "сбор"}
+        crowd_paraphrases = {"много людей", "большие скопления", "большие скоплен", "скопление людей", "много народу", "мног нар"}
+        work_keywords = {"опыт", "профес", "работ", "навык", "учеб", "обучен", "карьер", "школ", "унив", "курс"}
+
         # 1) If response directly contains topical stems from the comment => relevant
         if self._contains_topic_stem(response, comment_stems):
             return True
 
-        # 2) If response contains topical stems only from context but not from comment => NOT relevant (context is supplementary)
-        if self._contains_topic_stem(response, context_stems):
+        # 1b) if comment clearly refers to event/crowd even without shared stems, detect via event keywords in comment
+        comment_lower = (comment or "").lower()
+        comment_is_event = any(k in comment_lower for k in event_keywords)
+        # also check for common paraphrase words in comment
+        for p in ["толпа", "скоплен", "людей", "мног", "массов"]:
+            if p in comment_lower:
+                comment_is_event = True
+                break
+
+        # 2) If response contains event-related words/paraphrases and comment is event-related -> relevant
+        if comment_is_event:
+            # check response for event keywords or common paraphrases
+            if any(k in response for k in event_keywords):
+                return True
+            if any(p in response for p in crowd_paraphrases):
+                return True
+            # also allow synonyms like "камерн", "небольшая группа" expressed as words
+            if "камер" in response or "не всем" in response or "не комфорт" in response or "комфортно" in response:
+                # these are often contextual reactions to crowd discomfort
+                return True
+
+        # 2b) If response contains topical stems only from context but not from comment => NOT relevant
+        if self._contains_topic_stem(response, context_stems) and not comment_is_event:
             return False
 
         # 3) Negative-topic guard: if response introduces topics like profession/experience/work/training but comment/context do not mention them => reject
-        negative_topics = ["опыт", "профес", "работ", "навык", "учеб", "обучен", "карьер", "школ", "унив", "курсы", "специальн"]
-        for t in negative_topics:
+        for t in work_keywords:
             if t in response:
-                # allow only if comment or context mention related stem
                 if not any(t.startswith(s) or s.startswith(t[:len(s)]) for s in comment_stems.union(context_stems)):
                     return False
 
         # 4) Reaction-only disallowed: if response contains only an emotion token but no topical relation -> reject
         emotion_tokens = ["понимаю", "сожале", "надеюсь", "рад", "здорово", "спасибо", "пожалуйста", "удачи", "сочувствую"]
         has_emotion = any(t in response for t in emotion_tokens)
-        has_any_topic = len(comment_stems) > 0 and self._contains_topic_stem(response, comment_stems)
+        has_any_topic = (self._contains_topic_stem(response, comment_stems) or any(k in response for k in event_keywords))
         if has_emotion and not has_any_topic:
             # emotion alone is not sufficient to claim relevance
             return False
 
         # 5) Fallback: allow short confirmations only if they are not introducing new topics and seem like direct social reactions
-        # allow if response is short and contains common reaction phrases and comment is also short
         if len(response.split()) <= 8 and has_emotion:
-            # but ensure response does not add unrelated topics
-            for t in negative_topics:
+            for t in work_keywords:
                 if t in response:
                     return False
             return True
@@ -230,7 +252,7 @@ class OpenAIService:
 - Не используй шаблонные универсальные фразы, которые подходят к любому комментарию.
 - Не придумывай фактов, которых нет в комментарии или контексте поста.
 - Если комментарий говорит о мероприятии, ответ должен быть связан именно с мероприятием.
-- Если комментарий выражает сожаление, радость, вопрос, благодарность или личный опыт — ответ должен реагировать именно на это.
+- Если комментарий выражает сожаление, радость, вопрос, благодарность или личный опыт — ответ должен реаги[...]
 
 КОНТЕКСТ ПУБЛИКАЦИИ И РОДИТЕЛЬСКОГО КОММЕНТАРИЯ:
 {context}
