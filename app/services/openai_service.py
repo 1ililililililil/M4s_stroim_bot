@@ -12,13 +12,13 @@ log = logging.getLogger(__name__)
 
 SYSTEM = '''Ты AI-администратор Telegram-канала «МЧС | Мы Чего-то Строим».
 
-Тематика: пожарная служба, МЧС, работа пожарных, реальные выезды, техника, экипировка, обучение, физподгото... (сокращено для краткости)
+Тематика: пожарная служба, МЧС, работа пожарных, реальные выезды, техника, экипировка, обучение, физподгото.[...]
 
-Стиль: живой, дружелюбный, разговорный, уважительный, иногда лёгкий юмор. Без канцелярита и роботизированных фраз.
+Стиль: живой, дружелюбный, разговорный, уважительный, иногда лёгкий юмор. Без канцелярита и роботизированн�[...]
 
-Нельзя придумывать факты, выдавать догадки за факты, давать опасные инструкции, раскрывать личную или служной информации.
+Нельзя придумывать факты, выдавать догадки за факты, давать опасные инструкции, раскрывать личную или служ[...]
 
-Найденную память предыдущих публикаций используй только как дополнительный контекст. Текущий пост имеет более высокий приоритет.
+Найденную память предыдущих публикаций используй только как дополнительный контекст. Текущий пост имеет �[...]
 '''
 
 _DEFAULT_MAX_TOKENS = 1024
@@ -90,7 +90,7 @@ class OpenAIService:
 - Не придумывай фактов и не переходи на другую тему.
 
 Верни только JSON:
-{{"category":"QUESTION|PRAISE|JOKE|DISCUSSION|CRITICISM|NEGATIVE|CONFLICT|SPAM|ADVERTISING|INSULT|OFF_TOPIC|OTHER",
+{"category":"QUESTION|PRAISE|JOKE|DISCUSSION|CRITICISM|NEGATIVE|CONFLICT|SPAM|ADVERTISING|INSULT|OFF_TOPIC|OTHER",
 "sentiment":"positive|neutral|negative","confidence":0.0,"summary":"кратко",
 "requires_admin":true,"should_reply":false}}
 Обычная реакция, благодарность или короткая похвала не требуют ответа. should_reply=true
@@ -125,7 +125,7 @@ class OpenAIService:
 База знаний:
 {kb or "нет"}
 Верни только JSON:
-{{"category":"QUESTION|PRAISE|JOKE|DISCUSSION|CRITICISM|NEGATIVE|CONFLICT|SPAM|ADVERTISING|INSULT|OFF_TOPIC|OTHER",
+{"category":"QUESTION|PRAISE|JOKE|DISCUSSION|CRITICISM|NEGATIVE|CONFLICT|SPAM|ADVERTISING|INSULT|OFF_TOPIC|OTHER",
 "sentiment":"positive|neutral|negative","confidence":0.0,"summary":"кратко",
 "requires_admin":true,"should_reply":false,"reply":""}}
 Если should_reply=false, поле reply должно быть пустым.
@@ -133,14 +133,18 @@ class OpenAIService:
 {text}'''
         return AIAutoReplyResult.model_validate(await self._json(prompt))
 
-    def _extract_meaningful_words(self, text: str, limit=5) -> list[str]:
+    def _extract_meaningful_words(self, text: str, limit=8) -> list[str]:
         if not text:
             return []
+        # keep Russian and Latin letters, words of length >=3
         words = re.findall(r"[a-zа-яё]{3,}", text.lower(), flags=re.IGNORECASE)
-        # return top unique words preserving order
+        # filter common stopwords that are not meaningful in topics
+        stop = {"это", "такое", "очень", "все", "всё", "своё", "много", "мой", "мне", "мы", "вы", "по"}
         seen = set()
         out = []
         for w in words:
+            if w in stop:
+                continue
             if w in seen:
                 continue
             seen.add(w)
@@ -149,23 +153,62 @@ class OpenAIService:
                 break
         return out
 
-    def _is_response_relevant(self, response_text: str, comment: str, post_context: str | None) -> bool:
-        # Quick heuristic: response should contain at least one meaningful word from comment or mention common reaction words
-        response = (response_text or "").lower()
-        meaningful = self._extract_meaningful_words(comment, limit=6)
-        for w in meaningful:
-            if w in response:
-                return True
-        # also allow presence of clear reaction/emotion words
-        emotion_tokens = ["понимаю", "сожале", "надеюсь", "рад", "здорово", "спасибо", "пожалуйста", "удачи", "в следующий"]
-        for t in emotion_tokens:
-            if t in response:
-                return True
-        # if post context contains strong tokens, allow them
-        if post_context:
-            for w in self._extract_meaningful_words(post_context, limit=6):
-                if w in response:
+    def _stem(self, word: str, n: int = 5) -> str:
+        return word[:n]
+
+    def _contains_topic_stem(self, response: str, stems: set[str]) -> bool:
+        if not stems:
+            return False
+        # check if any stem appears in response words
+        resp_words = re.findall(r"[a-zа-яё]{3,}", (response or "").lower(), flags=re.IGNORECASE)
+        for rw in resp_words:
+            for s in stems:
+                if rw.startswith(s) or s.startswith(rw[:len(s)]):
                     return True
+        return False
+
+    def _is_response_relevant(self, response_text: str, comment: str, post_context: str | None) -> bool:
+        response = (response_text or "").lower()
+        # meaningful stems from comment and context
+        comment_words = self._extract_meaningful_words(comment, limit=8)
+        comment_stems = {self._stem(w) for w in comment_words}
+        context_words = self._extract_meaningful_words(post_context or "", limit=8)
+        context_stems = {self._stem(w) for w in context_words}
+
+        # 1) If response directly contains topical stems from the comment => relevant
+        if self._contains_topic_stem(response, comment_stems):
+            return True
+
+        # 2) If response contains topical stems only from context but not from comment => NOT relevant (context is supplementary)
+        if self._contains_topic_stem(response, context_stems):
+            return False
+
+        # 3) Negative-topic guard: if response introduces topics like profession/experience/work/training but comment/context do not mention them => reject
+        negative_topics = ["опыт", "профес", "работ", "навык", "учеб", "обучен", "карьер", "школ", "унив", "курсы", "специальн"]
+        for t in negative_topics:
+            if t in response:
+                # allow only if comment or context mention related stem
+                if not any(t.startswith(s) or s.startswith(t[:len(s)]) for s in comment_stems.union(context_stems)):
+                    return False
+
+        # 4) Reaction-only disallowed: if response contains only an emotion token but no topical relation -> reject
+        emotion_tokens = ["понимаю", "сожале", "надеюсь", "рад", "здорово", "спасибо", "пожалуйста", "удачи", "сочувствую"]
+        has_emotion = any(t in response for t in emotion_tokens)
+        has_any_topic = len(comment_stems) > 0 and self._contains_topic_stem(response, comment_stems)
+        if has_emotion and not has_any_topic:
+            # emotion alone is not sufficient to claim relevance
+            return False
+
+        # 5) Fallback: allow short confirmations only if they are not introducing new topics and seem like direct social reactions
+        # allow if response is short and contains common reaction phrases and comment is also short
+        if len(response.split()) <= 8 and has_emotion:
+            # but ensure response does not add unrelated topics
+            for t in negative_topics:
+                if t in response:
+                    return False
+            return True
+
+        # default: require topical relation — reject otherwise
         return False
 
     async def responses(self, comment, category, knowledge=None, post_context=None):
@@ -197,7 +240,7 @@ class OpenAIService:
 Верни только JSON:
 {{"responses":[{{"variant":1,"text":"..." }},{{"variant":2,"text":"..."}},{{"variant":3,"text":"..."}}]}}
 
-После составления ответов выполни внутреннюю проверку: для каждого варианта мысленно проверь — "Можно ли естественно использовать этот ответ как прямую реакцию именно на данный комментарий?" Если вариант не является прямой реакцией на комментарий — не возвращай его.'''
+После составления ответов выполни внутреннюю проверку: для каждого варианта мысленно проверь — "Можно ли естественно использовать этот ответ как прямую реакцию именно на данный комментарий?" Если вариант не является прямой реакцией — не возвращай его.'''
         result = AIResponsesResult.model_validate(await self._json(prompt))
         if len(result.responses) != 3:
             raise ValueError("AI did not return 3 responses")
