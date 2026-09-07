@@ -57,7 +57,7 @@ async def main():
     except Exception:
         logging.exception("Failed to set bot menu/commands")
 
-    logging.info("MCHS AI Admin Bot V3 запущен. Ад��инов: %s", len(settings.admins))
+    logging.info("MCHS AI Admin Bot V3 запущен. Админов: %s", len(settings.admins))
     await comments.start_comment_queue()
     try:
         await asyncio.gather(
