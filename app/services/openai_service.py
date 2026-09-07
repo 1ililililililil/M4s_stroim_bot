@@ -5,19 +5,20 @@ from openai import AsyncOpenAI
 from app.schemas.ai import AIAnalysisResult, AIAutoReplyResult, AIResponsesResult
 from typing import Optional
 from app.config import get_settings
+import re
 
 
 log = logging.getLogger(__name__)
 
 SYSTEM = '''Ты AI-администратор Telegram-канала «МЧС | Мы Чего-то Строим».
 
-Тематика: пожарная служба, МЧС, работа пожарных, реальные выезды, техника, экипировка, обучение, физподготовка, строительство и обычные будни автора.
+Тематика: пожарная служба, МЧС, работа пожарных, реальные выезды, техника, экипировка, обучение, физподгото... (сокращено для краткости)
 
-Стиль: живой, дружелюбный, разговорный, уважительный, иногда лёгкий юмор. Без канцелярита и роботизированных формулировок.
+Стиль: живой, дружелюбный, разговорный, уважительный, иногда лёгкий юмор. Без канцелярита и роботизированных фраз.
 
-Нельзя придумывать факты, выдавать догадки за факты, давать опасные инструкции, раскрывать личную или служебную информацию.
+Нельзя придумывать факты, выдавать догадки за факты, давать опасные инструкции, раскрывать личную или служной информации.
 
-Найденную память предыдущих публикаций используй только как дополнительный контекст. Текущая публикация и комментарий пользователя имеют приоритет.
+Найденную память предыдущих публикаций используй только как дополнительный контекст. Текущий пост имеет более высокий приоритет.
 '''
 
 _DEFAULT_MAX_TOKENS = 1024
@@ -74,6 +75,20 @@ class OpenAIService:
 {kb or "нет"}
 КОНТЕКСТ ПУБЛИКАЦИИ И РОДИТЕЛЬСКОГО КОММЕНТАРИЯ (если доступен):
 {context}
+
+ВАЖНО — порядок приоритетов при анализе (сначала самое важное):
+1) Точный смысл комментария (что именно сказал пользователь).
+2) Контекст исходного поста.
+3) Эмоция и намерение автора комментария.
+4) Категория комментария — влияет только на стиль ответа, но НЕ заменяет анализ содержания.
+5) Стиль ответов канала.
+
+Шаги, которые нужно выполнить перед ответом:
+- Сначала внимательно проанализируй конкретный комментарий и выдели его основную мысль.
+- Определи выраженную эмоцию или отношение.
+- Учти контекст публикации только как дополнительную информацию.
+- Не придумывай фактов и не переходи на другую тему.
+
 Верни только JSON:
 {{"category":"QUESTION|PRAISE|JOKE|DISCUSSION|CRITICISM|NEGATIVE|CONFLICT|SPAM|ADVERTISING|INSULT|OFF_TOPIC|OTHER",
 "sentiment":"positive|neutral|negative","confidence":0.0,"summary":"кратко",
@@ -91,6 +106,20 @@ class OpenAIService:
         prompt = f'''Проанализируй комментарий и, только если он действительно требует содержательного ответа,
 сразу подготовь один короткий ответ от имени Telegram-канала «МЧС | Мы Чего-то Строим».
 Не выдумывай фактов и не отвечай на обычную реакцию, благодарность, спам, рекламу или оскорбление.
+
+ВАЖНО — порядок приоритетов при генерации ответа (сначала самое важное):
+1) Точный смысл комментария.
+2) Контекст исходного поста.
+3) Эмоция и намерение автора комментария.
+4) Категория комментария — только как подсказка для стиля, НЕ как замена содержания.
+5) Стиль ответов канала.
+
+Перед тем как сформировать reply:
+- Сначала внимательно проанализируй конкретный комментарий и определи, о чём именно говорит пользователь.
+- Определи выраженную эмоцию/намерение.
+- Каждый вариант ответа (здесь один) должен быть прямым, естественным ответом на комментарий.
+- Не уходи в другую тему и не генерируй абстрактные рассуждения.
+
 КОНТЕКСТ ПУБЛИКАЦИИ И РОДИТЕЛЬСКОГО КОММЕНТАРИЯ:
 {context}
 База знаний:
@@ -104,25 +133,85 @@ class OpenAIService:
 {text}'''
         return AIAutoReplyResult.model_validate(await self._json(prompt))
 
+    def _extract_meaningful_words(self, text: str, limit=5) -> list[str]:
+        if not text:
+            return []
+        words = re.findall(r"[a-zа-яё]{3,}", text.lower(), flags=re.IGNORECASE)
+        # return top unique words preserving order
+        seen = set()
+        out = []
+        for w in words:
+            if w in seen:
+                continue
+            seen.add(w)
+            out.append(w)
+            if len(out) >= limit:
+                break
+        return out
+
+    def _is_response_relevant(self, response_text: str, comment: str, post_context: str | None) -> bool:
+        # Quick heuristic: response should contain at least one meaningful word from comment or mention common reaction words
+        response = (response_text or "").lower()
+        meaningful = self._extract_meaningful_words(comment, limit=6)
+        for w in meaningful:
+            if w in response:
+                return True
+        # also allow presence of clear reaction/emotion words
+        emotion_tokens = ["понимаю", "сожале", "надеюсь", "рад", "здорово", "спасибо", "пожалуйста", "удачи", "в следующий"]
+        for t in emotion_tokens:
+            if t in response:
+                return True
+        # if post context contains strong tokens, allow them
+        if post_context:
+            for w in self._extract_meaningful_words(post_context, limit=6):
+                if w in response:
+                    return True
+        return False
+
     async def responses(self, comment, category, knowledge=None, post_context=None):
         kb = "\n".join(f"- {x}" for x in (knowledge or [])[:10])
         context = post_context.strip() if post_context else "нет"
-        prompt = f'''Создай ровно 3 разных варианта ответа на комментарий.
-Категория: {category}
-Комментарий: {comment}
+        prompt = f'''Сначала внимательно проанализируй конкретный комментарий и выдели, о чём именно говорит пользователь.
+Определи эмоцию или отношение автора.
+Используй контекст публикации только как дополнительную информацию.
+Категорию ({category}) учитывай ТОЛЬКО для тона/стиля ответа, но НЕ замещай анализ содержания комментария.
+
+Создай ровно 3 разных варианта ответа на комментарий. Каждый вариант должен быть прямым, естественным ответом именно на этот комментарий.
+- Вариант 1: коротко и дружелюбно.
+- Вариант 2: разговорно и живо, можно лёгкий юмор.
+- Вариант 3: подробнее и содержательнее.
+
+Строгие правила:
+- Не уходи в другую тему.
+- Не генерируй абстрактные философские рассуждения.
+- Не используй шаблонные универсальные фразы, которые подходят к любому комментарию.
+- Не придумывай фактов, которых нет в комментарии или контексте поста.
+- Если комментарий говорит о мероприятии, ответ должен быть связан именно с мероприятием.
+- Если комментарий выражает сожаление, радость, вопрос, благодарность или личный опыт — ответ должен реагировать именно на это.
+
 КОНТЕКСТ ПУБЛИКАЦИИ И РОДИТЕЛЬСКОГО КОММЕНТАРИЯ:
 {context}
 Контекст/база знаний:
 {kb or "нет"}
-Если точного факта нет, не выдумывай его.
+
 Верни только JSON:
 {{"responses":[{{"variant":1,"text":"..." }},{{"variant":2,"text":"..."}},{{"variant":3,"text":"..."}}]}}
-1 — коротко и дружелюбно.
-2 — разговорно и живо, можно лёгкий юмор.
-3 — подробнее и содержательнее.'''
+
+После составления ответов выполни внутреннюю проверку: для каждого варианта мысленно проверь — "Можно ли естественно использовать этот ответ как прямую реакцию именно на данный комментарий?" Если вариант не является прямой реакцией на комментарий — не возвращай его.'''
         result = AIResponsesResult.model_validate(await self._json(prompt))
         if len(result.responses) != 3:
             raise ValueError("AI did not return 3 responses")
+
+        # Internal relevance check — reject if any response appears unrelated
+        bad = []
+        for r in result.responses:
+            if not self._is_response_relevant(r.text, comment or "", post_context or ""):
+                bad.append((r.variant, r.text))
+        if bad:
+            # Log details and raise to let caller handle fallback/retry
+            log.warning("AI returned responses that failed relevance check: %s", bad)
+            raise ValueError("AI returned irrelevant responses")
+
         return result.responses
 
     async def close(self):
