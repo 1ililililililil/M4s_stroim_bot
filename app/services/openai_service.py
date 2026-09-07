@@ -77,6 +77,8 @@ def is_response_relevant(response_text: str, comment: str, post_context: str | N
     event_keywords = {"меропр", "массов", "мероприят", "толп", "толпа", "люд", "людей", "скоплен", "скопл", "событ", "концерт", "сборка", "пожар", "огонь", "эвакуа"}
     crowd_paraphrases = {"много людей", "большие скопления", "скопление людей", "много народу"}
     work_keywords = {"опыт", "профес", "работ", "навык", "учеб", "обучен", "карьер", "образован", "унив", "курс"}
+    # Emergency/rescue actions that are relevant to event-based queries
+    emergency_actions = {"позвоните", "101", "112", "эвакуац", "покинут", "покидайт", "спасен", "помощь", "опасн", "зона"}
 
     # 1) Direct stem match with comment => relevant
     if contains_stem(response, comment_stems):
@@ -96,6 +98,9 @@ def is_response_relevant(response_text: str, comment: str, post_context: str | N
         if any(p in response for p in crowd_paraphrases):
             return True
         if "камер" in response or "не всем" in response or "не комфорт" in response or "комфортно" in response:
+            return True
+        # Allow emergency/rescue action instructions for event-based questions
+        if any(a in response for a in emergency_actions):
             return True
 
     # 3) If response introduces professional/work topics not present in comment/context -> reject
